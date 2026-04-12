@@ -1,7 +1,7 @@
 {
   "name": "wiki",
-  "version": "1.3.0",
-  "description": "Expose your SiYuan wiki as native MCP tools — search, get, journal, ADR, push.",
+  "version": "1.4.0",
+  "description": "Expose your SiYuan wiki as native MCP tools \u2014 search, get, journal, ADR, push.",
   "author": {
     "name": "onchainyaotoshi",
     "url": "https://github.com/onchainyaotoshi"
@@ -9,7 +9,7 @@
   "userConfig": {
     "siyuan_token": {
       "title": "SiYuan API Token",
-      "description": "Found in SiYuan → Settings → About → API token",
+      "description": "Found in SiYuan \u2192 Settings \u2192 About \u2192 API token",
       "type": "string",
       "sensitive": false
     },
@@ -21,7 +21,7 @@
     },
     "default_notebook": {
       "title": "Default Notebook",
-      "description": "Notebook name override. Kosongkan untuk auto-detect dari nama project folder (e.g. camis-api-native → camis-api-native-wiki).",
+      "description": "Notebook name override. Kosongkan untuk auto-detect dari nama project folder (e.g. camis-api-native \u2192 camis-api-native-wiki).",
       "type": "string",
       "sensitive": false
     }
@@ -29,7 +29,9 @@
   "mcpServers": {
     "wiki-mcp": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/bundle.js"],
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/bundle.js"
+      ],
       "env": {
         "SIYUAN_TOKEN": "${user_config.siyuan_token}",
         "SIYUAN_URL": "${user_config.siyuan_url}",

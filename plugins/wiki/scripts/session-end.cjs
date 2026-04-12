@@ -1,69 +1,128 @@
 'use strict';
 
 /**
- * Stop hook (asyncRewake) — mine current session for knowledge candidates.
- * Exit 0  → always exit 0 (non-zero triggers Claude Code "Stop hook error").
+ * Stop hook — auto-ingest knowledge candidates directly to SiYuan.
+ * No asyncRewake, no Claude wakeup, no token burn.
  *
- * Guard: lock file prevents rewaking more than once per COOLDOWN_MS.
- * Prevents infinite rewake loop when agent asks user and user responds
- * without ingesting candidates.
+ * Flow: mine last 3h → dedup against seen-hashes → POST to SiYuan → crosslink.
+ * Token dari ~/.claude/settings.json (pluginConfigs.wiki@wiki-plugin.options).
  */
 
-const fs = require('fs');
+const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
-const { mineSessions } = require(path.join(__dirname, '../mcp/src/mine-helpers'));
 
-const LOCK_FILE = '/tmp/wiki-stop-rewake.lock';
-const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+const LOG_FILE  = '/tmp/wiki-auto-ingest.log';
+const SEEN_FILE = path.join(os.homedir(), '.claude', 'wiki-auto-ingest-seen.json');
+const MAX_SEEN  = 500;
 
-function isInCooldown() {
+const SECTION_MAP = {
+  gotcha:   'Gotcha',
+  decision: 'Architecture Decision',
+  fix:      'Root Cause / Fix',
+  pattern:  'Convention / Pattern',
+};
+
+// ── Config ───────────────────────────────────────────────────────────────────
+
+function loadConfig() {
   try {
-    if (!fs.existsSync(LOCK_FILE)) return false;
-    const stat = fs.statSync(LOCK_FILE);
-    return (Date.now() - stat.mtimeMs) < COOLDOWN_MS;
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const opts = settings?.pluginConfigs?.['wiki@wiki-plugin']?.options || {};
+    return {
+      token:    opts.siyuan_token    || '',
+      url:      opts.siyuan_url      || 'http://127.0.0.1:6806',
+      notebook: opts.default_notebook || '',
+    };
   } catch (_) {
-    return false;
+    return { token: '', url: 'http://127.0.0.1:6806', notebook: '' };
   }
 }
 
-function writeLock() {
-  try { fs.writeFileSync(LOCK_FILE, String(Date.now())); } catch (_) {}
+// ── Dedup ────────────────────────────────────────────────────────────────────
+
+function loadSeen() {
+  try { return new Set(JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8'))); }
+  catch (_) { return new Set(); }
 }
 
-async function main() {
+function saveSeen(seen) {
   try {
-    // Skip rewake if already rewoke recently (prevents infinite loop)
-    if (isInCooldown()) {
+    const arr = [...seen].slice(-MAX_SEEN);
+    fs.writeFileSync(SEEN_FILE, JSON.stringify(arr));
+  } catch (_) {}
+}
+
+function fingerprint(snippet) {
+  return snippet.slice(0, 80).toLowerCase().replace(/\s+/g, ' ');
+}
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+
+function log(msg) {
+  try {
+    const line = `${new Date().toISOString()} [${process.env.PWD || '?'}] ${msg}\n`;
+    fs.appendFileSync(LOG_FILE, line);
+  } catch (_) {}
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+async function main() {
+  const cfg = loadConfig();
+  if (!cfg.token) {
+    log('skip — no SIYUAN_TOKEN in settings.json');
+    process.exit(0);
+  }
+
+  // Inject env vars BEFORE requiring any helper that reads process.env at load time
+  process.env.SIYUAN_TOKEN          = cfg.token;
+  process.env.SIYUAN_URL            = cfg.url;
+  if (cfg.notebook) process.env.WIKI_DEFAULT_NOTEBOOK = cfg.notebook;
+
+  try {
+    const srcDir         = path.join(__dirname, '../mcp/src');
+    const { mineSessions }  = require(path.join(srcDir, 'mine-helpers'));
+    const { journalAppend } = require(path.join(srcDir, 'journal-helpers'));
+    const { crosslink }     = require(path.join(srcDir, 'crosslink-helpers'));
+    const { makeClient, resolveNotebook, today } = require(path.join(srcDir, 'helpers'));
+
+    const mined = await mineSessions({ since: '3h', limit: 6 });
+    if (mined.totalHits === 0) {
+      log(`no candidates (${mined.blocksScanned} blocks scanned)`);
       process.exit(0);
     }
 
-    const result = await mineSessions({ since: '3h', limit: 6 });
+    const seen   = loadSeen();
+    const client = makeClient();
+    const nbName = resolveNotebook(cfg.notebook);
+    const date   = today();
+    let count    = 0;
 
-    if (result.totalHits === 0) {
-      process.exit(0);
-    }
-
-    // Build candidates summary for rewake context
-    const lines = [];
-    for (const { emoji, label, hits } of result.results) {
-      if (hits.length === 0) continue;
-      lines.push(`${emoji} ${label}:`);
-      for (const { date, snippet } of hits) {
-        lines.push(`  • ${snippet.slice(0, 300)}`);
+    for (const { cat, hits } of mined.results) {
+      const section = SECTION_MAP[cat] || cat;
+      for (const hit of hits) {
+        const fp = fingerprint(hit.snippet);
+        if (seen.has(fp)) continue;
+        seen.add(fp);
+        await journalAppend(client, nbName, section, hit.snippet, date);
+        count++;
       }
     }
 
-    lines.push(`\n⚡ Ini autonomous rewake — langsung eksekusi tanpa tanya user:`);
-    lines.push(`- Ingest yang worth it: wiki_journal_append (Gotcha/fix) atau wiki_decision_new (ADR)`);
-    lines.push(`- Skip implementation detail biasa — baca source lebih akurat`);
-    lines.push(`- Setelah ingest: wiki_crosslink()`);
-    lines.push(`- Kalau semua tidak worth di-capture: skip semua dan selesai.`);
+    saveSeen(seen);
 
-    writeLock(); // stamp cooldown
-    process.stdout.write(lines.join('\n') + '\n');
-    process.exit(0); // exit 0 — non-zero triggers Claude Code "Stop hook error"
-  } catch (_) {
-    process.exit(0); // jangan interrupt session end kalau error
+    if (count > 0) {
+      const nb = await client.getOrCreateNotebook(nbName);
+      await crosslink(client, nb.id);
+    }
+
+    log(`ingested ${count} new / ${mined.totalHits} candidates found`);
+    process.exit(0);
+  } catch (err) {
+    log(`ERROR: ${err.message}`);
+    process.exit(0);
   }
 }
 

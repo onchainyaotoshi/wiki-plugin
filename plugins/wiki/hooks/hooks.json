@@ -19,9 +19,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end.cjs\"",
-            "timeout": 15,
-            "asyncRewake": false,
-            "rewakeMessage": "Wiki knowledge capture — ada candidates dari sesi ini:"
+            "timeout": 30
           }
         ]
       }
