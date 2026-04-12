@@ -1,6 +1,14 @@
 # wiki-plugin
 
-Claude Code plugin yang expose SiYuan wiki sebagai MCP tools — tersedia di semua project tanpa setup per-project.
+Claude Code plugin yang expose [SiYuan](https://b3log.org/siyuan/) wiki sebagai native MCP tools — tersedia di semua project tanpa setup per-project.
+
+## Latar Belakang
+
+Plugin ini tumbuh dari sistem wiki yang dibangun di project `camis_api_native`. Awalnya wiki hanya bisa diakses via CLI dari satu project. Masalahnya: knowledge (ADR, gotcha, investigation) yang terakumulasi di SiYuan tidak bisa dipakai oleh project lain.
+
+Solusinya: ekstrak semua wiki tooling ke Claude Code plugin yang berjalan global — sehingga agent di project manapun bisa langsung query, journal, dan maintain wiki tanpa setup tambahan.
+
+Konsep audit wiki (`wiki_lint`, `wiki_crosslink`) terinspirasi dari tulisan **Andrej Karpathy** tentang knowledge management — khususnya idenya soal mendeteksi *"concepts mentioned but lacking their own page"* dan menjaga graph konektivitas antar halaman.
 
 ## Isi Repo
 
