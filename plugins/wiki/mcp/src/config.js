@@ -11,5 +11,5 @@ if (!token) {
 module.exports = {
   baseUrl: process.env.SIYUAN_URL || 'http://127.0.0.1:6806',
   token,
-  defaultNotebook: process.env.WIKI_DEFAULT_NOTEBOOK || 'camis-wiki',
+  defaultNotebook: process.env.WIKI_DEFAULT_NOTEBOOK || '',
 };

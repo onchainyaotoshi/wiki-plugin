@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Expose your SiYuan wiki as native MCP tools — search, get, journal, ADR, push.",
   "author": {
     "name": "onchainyaotoshi",
@@ -21,7 +21,7 @@
     },
     "default_notebook": {
       "title": "Default Notebook",
-      "description": "Default notebook name (default: camis-wiki)",
+      "description": "Notebook name override. Kosongkan untuk auto-detect dari nama project folder (e.g. camis-api-native → camis-api-native-wiki).",
       "type": "string",
       "sensitive": false
     }
