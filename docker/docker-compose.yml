@@ -1,0 +1,18 @@
+services:
+  siyuan:
+    image: b3log/siyuan:latest
+    container_name: siyuan
+    ports:
+      - "6806:6806"
+    volumes:
+      - siyuan-workspace:/siyuan/workspace
+    environment:
+      - PUID=1002
+      - PGID=1002
+      - SIYUAN_ACCESS_AUTH_CODE=camis-wiki-dev
+    restart: unless-stopped
+
+volumes:
+  siyuan-workspace:
+    external: true
+    name: cc-stack_siyuan-workspace
