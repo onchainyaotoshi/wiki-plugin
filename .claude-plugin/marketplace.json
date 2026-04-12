@@ -1,0 +1,18 @@
+{
+  "name": "wiki-plugin",
+  "owner": {
+    "name": "onchainyaotoshi",
+    "url": "https://github.com/onchainyaotoshi"
+  },
+  "metadata": {
+    "description": "SiYuan wiki integration for Claude Code — search, get, journal, and ADR tools available in all projects.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "wiki",
+      "description": "Expose your SiYuan wiki as native MCP tools. Search docs, append journal entries, scaffold ADRs, and push pages — from any Claude Code project.",
+      "source": "./plugins/wiki"
+    }
+  ]
+}

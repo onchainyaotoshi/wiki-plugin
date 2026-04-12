@@ -1,0 +1,34 @@
+{
+  "name": "wiki",
+  "version": "1.0.0",
+  "description": "Expose your SiYuan wiki as native MCP tools — search, get, journal, ADR, push.",
+  "author": {
+    "name": "onchainyaotoshi",
+    "url": "https://github.com/onchainyaotoshi"
+  },
+  "userConfig": {
+    "siyuan_token": {
+      "description": "SiYuan API token — Settings → About → API token in SiYuan UI",
+      "sensitive": true
+    },
+    "siyuan_url": {
+      "description": "SiYuan base URL (leave blank for default: http://127.0.0.1:6806)",
+      "sensitive": false
+    },
+    "default_notebook": {
+      "description": "Default notebook name (leave blank for default: camis-wiki)",
+      "sensitive": false
+    }
+  },
+  "mcpServers": {
+    "wiki-mcp": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/bundle.js"],
+      "env": {
+        "SIYUAN_TOKEN": "${user_config.siyuan_token}",
+        "SIYUAN_URL": "${user_config.siyuan_url}",
+        "WIKI_DEFAULT_NOTEBOOK": "${user_config.default_notebook}"
+      }
+    }
+  }
+}
