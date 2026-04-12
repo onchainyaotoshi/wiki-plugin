@@ -154,4 +154,75 @@ async function lintGraph(client, notebookId) {
   };
 }
 
-module.exports = { lintGaps, lintGraph };
+// ── Lint Contradictions ────────────────────────────────────────────────────
+
+async function lintContradictions(client, notebookId) {
+  // 1. Get all non-journal, non-log, non-index docs
+  const docs = await client.sql(
+    `SELECT hpath, id FROM blocks WHERE type='d' AND box='${notebookId}' LIMIT 100`
+  );
+
+  const pageClaims = [];
+  for (const doc of docs) {
+    if (!doc.hpath) continue;
+    if (doc.hpath.includes('/Journal/') || doc.hpath.endsWith('/log') || doc.hpath.endsWith('/index')) continue;
+    const { kramdown } = await client.getBlockKramdown(doc.id).catch(() => ({ kramdown: '' }));
+    if (!kramdown) continue;
+    // Extract bullet points and short sentences as "claims"
+    const claims = kramdown
+      .split('\n')
+      .filter(l => l.trim().length > 30 && l.trim().length < 300)
+      .map(l => l.replace(/^[-*>]\s*/, '').trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    if (claims.length) pageClaims.push({ hpath: doc.hpath, claims });
+  }
+
+  // 2. Look for simple negation patterns between pages
+  // Flag pairs where one page says "always X" and another says "never X" or "don't X"
+  const POSITIVE = [/\bselalu\b/i, /\bwajib\b/i, /\bgunakan\b/i, /\bpakai\b/i, /\balways\b/i, /\bmust\b/i, /\buse\b/i];
+  const NEGATIVE = [/\bjangan\b/i, /\bdilarang\b/i, /\bjangan pernah\b/i, /\bnever\b/i, /\bdon't\b/i, /\bavoid\b/i, /\bdo not\b/i];
+
+  const flags = [];
+
+  for (let i = 0; i < pageClaims.length; i++) {
+    for (let j = i + 1; j < pageClaims.length; j++) {
+      const a = pageClaims[i];
+      const b = pageClaims[j];
+
+      for (const ca of a.claims) {
+        for (const cb of b.claims) {
+          // Extract subject (first 3-4 words after removing sentiment)
+          const subjectA = ca.replace(/^(selalu|wajib|jangan|always|never|must|don't)\s+/i, '').slice(0, 40).toLowerCase();
+          const subjectB = cb.replace(/^(selalu|wajib|jangan|always|never|must|don't)\s+/i, '').slice(0, 40).toLowerCase();
+
+          // Check if subjects overlap (>3 chars in common)
+          const wordsA = new Set(subjectA.split(/\s+/).filter(w => w.length > 3));
+          const wordsB = subjectB.split(/\s+/).filter(w => w.length > 3);
+          const overlap = wordsB.filter(w => wordsA.has(w));
+
+          if (overlap.length < 1) continue;
+
+          const aPositive = POSITIVE.some(p => p.test(ca));
+          const aNegative = NEGATIVE.some(p => p.test(ca));
+          const bPositive = POSITIVE.some(p => p.test(cb));
+          const bNegative = NEGATIVE.some(p => p.test(cb));
+
+          if ((aPositive && bNegative) || (aNegative && bPositive)) {
+            flags.push({
+              pageA: a.hpath, claimA: ca.slice(0, 100),
+              pageB: b.hpath, claimB: cb.slice(0, 100),
+              overlap,
+            });
+          }
+        }
+      }
+      if (flags.length > 20) break; // cap at 20 findings
+    }
+    if (flags.length > 20) break;
+  }
+
+  return flags;
+}
+
+module.exports = { lintGaps, lintGraph, lintContradictions };

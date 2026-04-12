@@ -5,7 +5,8 @@ const { resolveNotebook, makeClient, today } = require('./helpers');
 const { journalAppend }       = require('./journal-helpers');
 const { createDecision }      = require('./decision-helpers');
 const { crosslink }           = require('./crosslink-helpers');
-const { lintGaps, lintGraph } = require('./lint-helpers');
+const { lintGaps, lintGraph, lintContradictions } = require('./lint-helpers');
+const { updateRelatedEntities } = require('./entity-update-helpers');
 const { mineSessions }        = require('./mine-helpers');
 const { suggestADR }          = require('./suggest-adr-helpers');
 const { hashPaths }           = require('./hash-helpers');
@@ -118,6 +119,7 @@ const tools = {
         const nbName   = resolveNotebook(notebook);
         const result   = await journalAppend(client, nbName, section, text, today());
         try { await appendLog(client, nbName, `[journal] ${section}: ${text.slice(0, 80)}`); } catch (_) {}
+        try { await updateRelatedEntities(client, nbName, section, text, today()); } catch (_) {}
         return ok(result);
       } catch (err) { return wrapError(err); }
     },
@@ -184,6 +186,7 @@ const tools = {
         }
 
         try { await appendLog(client, nbName, `[push] ${path}`); } catch (_) {}
+        try { await reindex(client, nb.id); } catch (_) {}
         return ok(`${existing ? 'Updated' : 'Created'}: ${path}`);
       } catch (err) { return wrapError(err); }
     },
@@ -223,9 +226,9 @@ const tools = {
   },
 
   wiki_lint: {
-    description: 'Audit wiki health. type="gaps" (undefined concepts), "graph" (orphans/hubs), "all" (both).',
+    description: 'Audit wiki health. type="gaps" (undefined concepts), "graph" (orphans/hubs), "contradictions" (conflicting claims), "all" (all checks).',
     inputSchema: {
-      type:     z.enum(['gaps', 'graph', 'all']).default('all').describe('Lint type'),
+      type:     z.enum(['gaps', 'graph', 'contradictions', 'all']).default('all').describe('Lint type'),
       notebook: z.string().optional().describe('Notebook name override'),
     },
     handler: async ({ type = 'all', notebook } = {}) => {
@@ -235,6 +238,7 @@ const tools = {
         const result = {};
         if (type === 'gaps' || type === 'all') result.gaps  = await lintGaps(client, nb.id);
         if (type === 'graph' || type === 'all') result.graph = await lintGraph(client, nb.id);
+        if (type === 'contradictions' || type === 'all') result.contradictions = await lintContradictions(client, nb.id);
         return ok(result);
       } catch (err) { return wrapError(err); }
     },
