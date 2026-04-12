@@ -8,15 +8,21 @@
   },
   "userConfig": {
     "siyuan_token": {
-      "description": "SiYuan API token — Settings → About → API token in SiYuan UI",
+      "title": "SiYuan API Token",
+      "description": "Found in SiYuan → Settings → About → API token",
+      "type": "string",
       "sensitive": true
     },
     "siyuan_url": {
-      "description": "SiYuan base URL (leave blank for default: http://127.0.0.1:6806)",
+      "title": "SiYuan URL",
+      "description": "SiYuan base URL (default: http://127.0.0.1:6806)",
+      "type": "string",
       "sensitive": false
     },
     "default_notebook": {
-      "description": "Default notebook name (leave blank for default: camis-wiki)",
+      "title": "Default Notebook",
+      "description": "Default notebook name (default: camis-wiki)",
+      "type": "string",
       "sensitive": false
     }
   },
