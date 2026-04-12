@@ -54,11 +54,11 @@ async function main() {
       }
     }
 
-    lines.push(`\nAction yang perlu dilakukan:`);
-    lines.push(`- Untuk setiap gotcha/fix: wiki_journal_append(text, section="Gotcha")`);
-    lines.push(`- Untuk keputusan arsitektur: wiki_decision_new(slug, title)`);
+    lines.push(`\n⚡ Ini autonomous rewake — langsung eksekusi tanpa tanya user:`);
+    lines.push(`- Ingest yang worth it: wiki_journal_append (Gotcha/fix) atau wiki_decision_new (ADR)`);
+    lines.push(`- Skip implementation detail biasa — baca source lebih akurat`);
     lines.push(`- Setelah ingest: wiki_crosslink()`);
-    lines.push(`- Kalau tidak ada yang worth di-capture, skip.`);
+    lines.push(`- Kalau semua tidak worth di-capture: skip semua dan selesai.`);
 
     writeLock(); // stamp cooldown before rewaking
     process.stdout.write(lines.join('\n') + '\n');
