@@ -1,37 +1,38 @@
 'use strict';
 
-const { z }              = require('zod');
+const { z }                   = require('zod');
 const { resolveNotebook, makeClient, today } = require('./helpers');
-const { journalAppend }  = require('./journal-helpers');
-const { createDecision } = require('./decision-helpers');
+const { journalAppend }       = require('./journal-helpers');
+const { createDecision }      = require('./decision-helpers');
+const { crosslink }           = require('./crosslink-helpers');
+const { lintGaps, lintGraph } = require('./lint-helpers');
+const { mineSessions }        = require('./mine-helpers');
+const { suggestADR }          = require('./suggest-adr-helpers');
+const { hashPaths }           = require('./hash-helpers');
 
-// ── Error wrapper ──
+// ── Utilities ──────────────────────────────────────────────────────────────
 
 function wrapError(err) {
-  return {
-    content: [{ type: 'text', text: `Error: ${err.message}` }],
-    isError: true,
-  };
+  return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
 }
 
-function ok(text) {
-  const out = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
-  return { content: [{ type: 'text', text: out }] };
+function ok(data) {
+  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  return { content: [{ type: 'text', text }] };
 }
 
-// ── Tool definitions ──
+// ── Tool definitions ───────────────────────────────────────────────────────
 
 const tools = {
+
+  // ── Read ──────────────────────────────────────────────────────────────────
 
   wiki_list_notebooks: {
     description: 'List all notebooks in the SiYuan wiki.',
     inputSchema: {},
     handler: async () => {
-      try {
-        const client    = makeClient();
-        const notebooks = await client.listNotebooks();
-        return ok(notebooks);
-      } catch (err) { return wrapError(err); }
+      try { return ok(await makeClient().listNotebooks()); }
+      catch (err) { return wrapError(err); }
     },
   },
 
@@ -39,19 +40,14 @@ const tools = {
     description: 'Full-text search across wiki blocks. Scoped to the resolved notebook by default.',
     inputSchema: {
       query:    z.string().describe('Search text'),
-      notebook: z.string().optional().describe('Notebook name override (default: WIKI_DEFAULT_NOTEBOOK)'),
+      notebook: z.string().optional().describe('Notebook name override'),
       limit:    z.number().optional().describe('Max results (default 20)'),
     },
     handler: async ({ query, notebook, limit }) => {
       try {
         const client = makeClient();
-        const nbName = resolveNotebook(notebook);
-        const nb     = await client.getNotebookByName(nbName);
-        const results = await client.fullTextSearch(
-          query,
-          nb ? { notebookId: nb.id, limit } : { limit }
-        );
-        return ok(results);
+        const nb     = await client.getNotebookByName(resolveNotebook(notebook));
+        return ok(await client.fullTextSearch(query, nb ? { notebookId: nb.id, limit } : { limit }));
       } catch (err) { return wrapError(err); }
     },
   },
@@ -65,10 +61,9 @@ const tools = {
     handler: async ({ path, notebook }) => {
       try {
         const client = makeClient();
-        const nbName = resolveNotebook(notebook);
-        const nb     = await client.getNotebookByName(nbName);
-        if (!nb) return ok(`Notebook "${nbName}" not found`);
-        const doc    = await client.getDocByHPath(nb.id, path);
+        const nb     = await client.getNotebookByName(resolveNotebook(notebook));
+        if (!nb) return ok(`Notebook not found`);
+        const doc = await client.getDocByHPath(nb.id, path);
         if (!doc) return ok('null');
         const { kramdown } = await client.getBlockKramdown(doc.id);
         return ok(kramdown);
@@ -76,69 +71,148 @@ const tools = {
     },
   },
 
+  // ── Write ─────────────────────────────────────────────────────────────────
+
   wiki_journal_append: {
-    description: "Append a bullet to a section in today's journal entry. Creates the journal doc if it doesn't exist.",
+    description: "Append a bullet to a section in today's journal. Creates the doc if needed.",
     inputSchema: {
       text:     z.string().describe('Bullet body text'),
-      section:  z.string().default('What Happened').describe('Section heading to append under'),
+      section:  z.string().default('What Happened').describe('Section heading'),
       notebook: z.string().optional().describe('Notebook name override'),
     },
     handler: async ({ text, section = 'What Happened', notebook }) => {
       try {
         const client = makeClient();
-        const nbName = resolveNotebook(notebook);
-        const date   = today();
-        const result = await journalAppend(client, nbName, section, text, date);
-        return ok(result);
+        return ok(await journalAppend(client, resolveNotebook(notebook), section, text, today()));
       } catch (err) { return wrapError(err); }
     },
   },
 
   wiki_decision_new: {
-    description: 'Scaffold a new ADR (Architecture Decision Record) in /Decisions/.',
+    description: 'Scaffold a new ADR in /Decisions/.',
     inputSchema: {
       slug:     z.string().describe('Kebab-case slug, e.g. "use-redis-streams"'),
       title:    z.string().describe('Human-readable title'),
-      body:     z.string().optional().describe('Optional extra markdown appended after template'),
+      body:     z.string().optional().describe('Extra markdown appended after template'),
       notebook: z.string().optional().describe('Notebook name override'),
     },
     handler: async ({ slug, title, body, notebook }) => {
       try {
         const client = makeClient();
-        const nbName = resolveNotebook(notebook);
-        const result = await createDecision(client, nbName, slug, title, body);
+        const result = await createDecision(client, resolveNotebook(notebook), slug, title, body);
         return ok(`Created ADR: ${result.path} (id=${result.id})`);
       } catch (err) { return wrapError(err); }
     },
   },
 
   wiki_push: {
-    description: 'Upsert a wiki document by path. Updates if exists, creates if not.',
+    description: 'Upsert a wiki document. Optionally track source files for lint-stale.',
     inputSchema: {
-      path:     z.string().describe('Document path, e.g. /Guides/deploy'),
-      markdown: z.string().describe('Full Markdown content for the document'),
-      type:     z.string().optional().describe('custom-wiki-type attribute value, e.g. "guide"'),
-      notebook: z.string().optional().describe('Notebook name override'),
+      path:         z.string().describe('Document path, e.g. /Guides/deploy'),
+      markdown:     z.string().describe('Full Markdown content'),
+      type:         z.string().optional().describe('custom-wiki-type, e.g. "guide"'),
+      tags:         z.string().optional().describe('Comma-separated tags, e.g. "ginee,data-integrity"'),
+      source_files: z.array(z.string()).optional().describe('Source file paths to hash for staleness tracking'),
+      notebook:     z.string().optional().describe('Notebook name override'),
     },
-    handler: async ({ path, markdown, type, notebook }) => {
+    handler: async ({ path, markdown, type, tags, source_files, notebook }) => {
       try {
         const client = makeClient();
-        const nbName = resolveNotebook(notebook);
-        const nb     = await client.getOrCreateNotebook(nbName);
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
         const existing = await client.getDocByHPath(nb.id, path);
 
+        let docId;
         if (existing) {
           await client.updateBlock(existing.id, markdown);
-          if (type) await client.setBlockAttrs(existing.id, { 'custom-wiki-type': type });
-          return ok(`Updated: ${path}`);
+          docId = existing.id;
         } else {
           await client.createDocWithMd(nb.id, path, markdown);
-          if (type) {
-            const doc = await client.getDocByHPath(nb.id, path);
-            if (doc) await client.setBlockAttrs(doc.id, { 'custom-wiki-type': type });
-          }
-          return ok(`Created: ${path}`);
+          const doc = await client.getDocByHPath(nb.id, path);
+          docId = doc?.id;
         }
+
+        if (docId) {
+          const attrs = {};
+          if (type)         attrs['custom-wiki-type']    = type;
+          if (tags)         attrs['custom-tags']         = tags;
+          if (source_files?.length) {
+            const base = process.env.PWD || '';
+            const { hash, resolvedPaths } = hashPaths(source_files, base);
+            attrs['custom-source-files'] = resolvedPaths.join(',');
+            attrs['custom-source-hash']  = hash;
+            attrs['custom-last-ingested'] = new Date().toISOString();
+          }
+          if (Object.keys(attrs).length) await client.setBlockAttrs(docId, attrs);
+        }
+
+        return ok(`${existing ? 'Updated' : 'Created'}: ${path}`);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  // ── Maintenance ──────────────────────────────────────────────────────────
+
+  wiki_crosslink: {
+    description: 'Scan wiki and replace plain text mentions with SiYuan block refs. Run after batch ingests.',
+    inputSchema: {
+      notebook: z.string().optional().describe('Notebook name override'),
+    },
+    handler: async ({ notebook } = {}) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        return ok(await crosslink(client, nb.id));
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_lint: {
+    description: 'Audit wiki health. type="gaps" (undefined concepts), "graph" (orphans/hubs), "all" (both).',
+    inputSchema: {
+      type:     z.enum(['gaps', 'graph', 'all']).default('all').describe('Lint type'),
+      notebook: z.string().optional().describe('Notebook name override'),
+    },
+    handler: async ({ type = 'all', notebook } = {}) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        const result = {};
+        if (type === 'gaps' || type === 'all') result.gaps  = await lintGaps(client, nb.id);
+        if (type === 'graph' || type === 'all') result.graph = await lintGraph(client, nb.id);
+        return ok(result);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  // ── Project-aware (uses process.env.PWD) ─────────────────────────────────
+
+  wiki_mine: {
+    description: 'Mine Claude Code sessions and plan files for knowledge candidates. Uses PWD as project path.',
+    inputSchema: {
+      since:        z.string().optional().describe('Time window: "1d", "7d", "30d" (default: all)'),
+      limit:        z.number().optional().describe('Max hits per category (default 6)'),
+      cat:          z.string().optional().describe('Filter category: gotcha|decision|fix|pattern'),
+      plans_only:   z.boolean().optional().describe('Only scan plan/brainstorm files, skip JSONL sessions'),
+      project_path: z.string().optional().describe('Project root path (default: current PWD)'),
+    },
+    handler: async ({ since, limit, cat, plans_only, project_path } = {}) => {
+      try {
+        return ok(await mineSessions({ since, limit, cat, plansOnly: plans_only, projectPath: project_path }));
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_suggest_adr: {
+    description: 'Mine git log for modules with significant activity but no ADR coverage.',
+    inputSchema: {
+      repo_path: z.string().optional().describe('Git repo path (default: current PWD)'),
+      notebook:  z.string().optional().describe('Notebook name override'),
+    },
+    handler: async ({ repo_path, notebook } = {}) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        return ok(await suggestADR(client, nb.id, repo_path));
       } catch (err) { return wrapError(err); }
     },
   },
