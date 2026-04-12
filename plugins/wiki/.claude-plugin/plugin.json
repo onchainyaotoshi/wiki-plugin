@@ -11,7 +11,7 @@
       "title": "SiYuan API Token",
       "description": "Found in SiYuan → Settings → About → API token",
       "type": "string",
-      "sensitive": true
+      "sensitive": false
     },
     "siyuan_url": {
       "title": "SiYuan URL",
