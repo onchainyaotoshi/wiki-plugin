@@ -1,0 +1,30 @@
+{
+  "description": "Wiki knowledge automation — mine at session start, capture at session end.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.cjs\"",
+            "timeout": 30,
+            "statusMessage": "Mining wiki candidates..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end.cjs\"",
+            "timeout": 15,
+            "asyncRewake": true,
+            "rewakeMessage": "Wiki knowledge capture — ada candidates dari sesi ini:"
+          }
+        ]
+      }
+    ]
+  }
+}
