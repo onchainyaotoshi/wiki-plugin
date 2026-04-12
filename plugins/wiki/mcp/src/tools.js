@@ -9,6 +9,8 @@ const { lintGaps, lintGraph } = require('./lint-helpers');
 const { mineSessions }        = require('./mine-helpers');
 const { suggestADR }          = require('./suggest-adr-helpers');
 const { hashPaths }           = require('./hash-helpers');
+const { appendLog }           = require('./log-helpers');
+const { reindex }             = require('./index-helpers');
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
@@ -42,12 +44,42 @@ const tools = {
       query:    z.string().describe('Search text'),
       notebook: z.string().optional().describe('Notebook name override'),
       limit:    z.number().optional().describe('Max results (default 20)'),
+      save_as:  z.string().optional().describe('If provided, save search results as a new wiki page at this path'),
     },
-    handler: async ({ query, notebook, limit }) => {
+    handler: async ({ query, notebook, limit, save_as }) => {
       try {
         const client = makeClient();
-        const nb     = await client.getNotebookByName(resolveNotebook(notebook));
-        return ok(await client.fullTextSearch(query, nb ? { notebookId: nb.id, limit } : { limit }));
+        const nbName = resolveNotebook(notebook);
+        const nb     = await client.getNotebookByName(nbName);
+        const results = await client.fullTextSearch(query, nb ? { notebookId: nb.id, limit } : { limit });
+
+        if (save_as && results.length > 0) {
+          // Format results as markdown and push to save_as path
+          const lines = [
+            `# Search: ${query}`,
+            `_Saved: ${new Date().toISOString()}_`,
+            '',
+            `**${results.length} results**`,
+            '',
+          ];
+          for (const r of results) {
+            lines.push(`## ${r.hpath || r.id}`);
+            lines.push((r.content || r.markdown || '').slice(0, 400));
+            lines.push('');
+          }
+          const markdown = lines.join('\n');
+
+          const saveNb = await client.getOrCreateNotebook(nbName);
+          const existing = await client.getDocByHPath(saveNb.id, save_as);
+          if (existing) {
+            await client.updateBlock(existing.id, markdown);
+          } else {
+            await client.createDocWithMd(saveNb.id, save_as, markdown);
+          }
+          try { await appendLog(client, nbName, `[push] ${save_as}`); } catch (_) {}
+        }
+
+        return ok(results);
       } catch (err) { return wrapError(err); }
     },
   },
@@ -82,8 +114,11 @@ const tools = {
     },
     handler: async ({ text, section = 'What Happened', notebook }) => {
       try {
-        const client = makeClient();
-        return ok(await journalAppend(client, resolveNotebook(notebook), section, text, today()));
+        const client   = makeClient();
+        const nbName   = resolveNotebook(notebook);
+        const result   = await journalAppend(client, nbName, section, text, today());
+        try { await appendLog(client, nbName, `[journal] ${section}: ${text.slice(0, 80)}`); } catch (_) {}
+        return ok(result);
       } catch (err) { return wrapError(err); }
     },
   },
@@ -99,7 +134,9 @@ const tools = {
     handler: async ({ slug, title, body, notebook }) => {
       try {
         const client = makeClient();
-        const result = await createDecision(client, resolveNotebook(notebook), slug, title, body);
+        const nbName = resolveNotebook(notebook);
+        const result = await createDecision(client, nbName, slug, title, body);
+        try { await appendLog(client, nbName, `[decision] ${slug}: ${title}`); } catch (_) {}
         return ok(`Created ADR: ${result.path} (id=${result.id})`);
       } catch (err) { return wrapError(err); }
     },
@@ -118,7 +155,8 @@ const tools = {
     handler: async ({ path, markdown, type, tags, source_files, notebook }) => {
       try {
         const client = makeClient();
-        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        const nbName = resolveNotebook(notebook);
+        const nb     = await client.getOrCreateNotebook(nbName);
         const existing = await client.getDocByHPath(nb.id, path);
 
         let docId;
@@ -145,6 +183,7 @@ const tools = {
           if (Object.keys(attrs).length) await client.setBlockAttrs(docId, attrs);
         }
 
+        try { await appendLog(client, nbName, `[push] ${path}`); } catch (_) {}
         return ok(`${existing ? 'Updated' : 'Created'}: ${path}`);
       } catch (err) { return wrapError(err); }
     },
@@ -161,7 +200,24 @@ const tools = {
       try {
         const client = makeClient();
         const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
-        return ok(await crosslink(client, nb.id));
+        const result = await crosslink(client, nb.id);
+        // Refresh index after crosslink since this runs after batch ingests
+        try { result.reindex = await reindex(client, nb.id); } catch (_) {}
+        return ok(result);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_reindex: {
+    description: 'Rebuild /index — full catalog of all wiki pages grouped by section.',
+    inputSchema: {
+      notebook: z.string().optional().describe('Notebook name override'),
+    },
+    handler: async ({ notebook } = {}) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        return ok(await reindex(client, nb.id));
       } catch (err) { return wrapError(err); }
     },
   },
