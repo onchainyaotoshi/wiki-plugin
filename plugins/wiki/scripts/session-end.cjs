@@ -2,8 +2,7 @@
 
 /**
  * Stop hook (asyncRewake) — mine current session for knowledge candidates.
- * Exit 0  → nothing found, no rewake.
- * Exit 2  → candidates found, agent rewakes with output.
+ * Exit 0  → always exit 0 (non-zero triggers Claude Code "Stop hook error").
  *
  * Guard: lock file prevents rewaking more than once per COOLDOWN_MS.
  * Prevents infinite rewake loop when agent asks user and user responds
@@ -60,9 +59,9 @@ async function main() {
     lines.push(`- Setelah ingest: wiki_crosslink()`);
     lines.push(`- Kalau semua tidak worth di-capture: skip semua dan selesai.`);
 
-    writeLock(); // stamp cooldown before rewaking
+    writeLock(); // stamp cooldown
     process.stdout.write(lines.join('\n') + '\n');
-    process.exit(2); // rewake agent
+    process.exit(0); // exit 0 — non-zero triggers Claude Code "Stop hook error"
   } catch (_) {
     process.exit(0); // jangan interrupt session end kalau error
   }
