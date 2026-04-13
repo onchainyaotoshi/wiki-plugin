@@ -17,10 +17,11 @@ const SEEN_FILE = path.join(os.homedir(), '.claude', 'wiki-auto-ingest-seen.json
 const MAX_SEEN  = 500;
 
 const SECTION_MAP = {
-  gotcha:   'Gotcha',
-  decision: 'Architecture Decision',
-  fix:      'Root Cause / Fix',
-  pattern:  'Convention / Pattern',
+  gotcha:   'What Happened',
+  decision: 'What Happened',
+  fix:      'What Happened',
+  pattern:  'What Happened',
+  workflow: 'What Happened',
 };
 
 // ── Config ───────────────────────────────────────────────────────────────────
