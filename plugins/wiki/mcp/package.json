@@ -4,7 +4,8 @@
   "description": "SiYuan wiki MCP server \u2014 bundled for Claude Code plugin",
   "main": "bundle.js",
   "scripts": {
-    "build": "esbuild index.js --bundle --platform=node --format=cjs --minify --outfile=bundle.js"
+    "build": "esbuild index.js --bundle --platform=node --format=cjs --minify --outfile=bundle.js",
+    "release": "node -e \"const v=process.env.npm_config_version||process.argv[1]; if(!v){console.error('Usage: npm run release --version=X.Y.Z');process.exit(1);} const fs=require('fs'); ['../.claude-plugin/plugin.json','./package.json'].forEach(f=>{const d=JSON.parse(fs.readFileSync(f,'utf8'));d.version=v;fs.writeFileSync(f,JSON.stringify(d,null,2)+'\\n');console.log('Updated',f,'to',v);})\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
