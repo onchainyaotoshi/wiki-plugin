@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Expose your SiYuan wiki as native MCP tools — search, get, journal, ADR, push.",
   "author": {
     "name": "onchainyaotoshi",

@@ -1,20 +1,49 @@
 'use strict';
 
+const path         = require('path');
 const SiYuanClient = require('./siyuan-client');
 const config       = require('./config');
 
 /**
  * Derive notebook name from current project path (process.env.PWD).
- * /home/firman/camis_api_native → camis-api-native-wiki
- * /home/firman/other-project   → other-project-wiki
+ * Automatically resolves git worktrees to their main project directory,
+ * regardless of worktree path structure:
+ *   /home/firman/camis_api_native/.claude/worktrees/feat+foo → camis-api-native-wiki
+ *   /home/firman/camis_api_native-feat-branch               → camis-api-native-wiki
+ *   /home/firman/camis_api_native                           → camis-api-native-wiki
  */
 function notebookFromPwd() {
   const pwd = process.env.PWD;
   if (!pwd) return 'wiki';
-  const name = pwd.split('/').pop()            // last segment
-    .replace(/[_\s]/g, '-')                    // underscore/space → hyphen
-    .replace(/[^a-zA-Z0-9-]/g, '')             // strip other special chars
-    .replace(/-+/g, '-')                       // collapse multiple hyphens
+
+  // Try to find the main worktree root via git.
+  // `git rev-parse --git-common-dir` returns:
+  //   - '.git' (relative) when we're in the main worktree
+  //   - '/abs/path/to/main/.git' when we're in a linked worktree
+  // path.resolve(pwd, result) normalises both cases to an absolute path,
+  // then dirname gives us the main project directory.
+  try {
+    const { execSync } = require('child_process');
+    const rawCommonDir = execSync('git rev-parse --git-common-dir', {
+      cwd: pwd,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    }).trim();
+    const projectDir = path.dirname(path.resolve(pwd, rawCommonDir));
+    const name = path.basename(projectDir)
+      .replace(/[_\s]/g, '-')
+      .replace(/[^a-zA-Z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .toLowerCase();
+    return `${name}-wiki`;
+  } catch {
+    // Not a git repo or git unavailable — fall back to last PWD segment.
+  }
+
+  const name = pwd.split('/').pop()
+    .replace(/[_\s]/g, '-')
+    .replace(/[^a-zA-Z0-9-]/g, '')
+    .replace(/-+/g, '-')
     .toLowerCase();
   return `${name}-wiki`;
 }
