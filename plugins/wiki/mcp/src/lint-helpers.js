@@ -225,4 +225,47 @@ async function lintContradictions(client, notebookId) {
   return flags;
 }
 
-module.exports = { lintGaps, lintGraph, lintContradictions };
+// ── Lint Stale ─────────────────────────────────────────────────────────────
+
+async function lintStale(client, notebookId) {
+  const { hashPaths } = require('./hash-helpers');
+
+  const rows = await client.sql(
+    `SELECT b.hpath, b.id, a.value as source_files,
+            (SELECT value FROM attributes WHERE name='custom-source-hash' AND block_id=b.id LIMIT 1) as stored_hash
+     FROM blocks b
+     JOIN attributes a ON a.block_id = b.id
+     WHERE b.box='${notebookId}' AND b.type='d' AND a.name='custom-source-files'`
+  );
+
+  const stale = [];
+
+  for (const row of rows) {
+    if (!row.source_files || !row.stored_hash) continue;
+    const filePaths = row.source_files.split(',').map(s => s.trim()).filter(Boolean);
+    try {
+      const { hash } = hashPaths(filePaths, '');
+      if (hash !== row.stored_hash) {
+        stale.push({
+          hpath: row.hpath,
+          source_files: filePaths,
+          stored_hash: row.stored_hash,
+          current_hash: hash,
+        });
+      }
+    } catch (_) {
+      // Source file missing — also stale
+      stale.push({
+        hpath: row.hpath,
+        source_files: filePaths,
+        stored_hash: row.stored_hash,
+        current_hash: null,
+        error: 'source file not found',
+      });
+    }
+  }
+
+  return stale;
+}
+
+module.exports = { lintGaps, lintGraph, lintContradictions, lintStale };
