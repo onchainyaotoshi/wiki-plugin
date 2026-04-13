@@ -94,11 +94,15 @@ const tools = {
     handler: async ({ path, notebook }) => {
       try {
         const client = makeClient();
-        const nb     = await client.getNotebookByName(resolveNotebook(notebook));
+        const nbName = resolveNotebook(notebook);
+        const nb     = await client.getNotebookByName(nbName);
         if (!nb) return ok(`Notebook not found`);
         const doc = await client.getDocByHPath(nb.id, path);
         if (!doc) return ok('null');
         const { kramdown } = await client.getBlockKramdown(doc.id);
+        // Fire-and-forget feedback tracking
+        const { recordPageUseful } = require('./feedback-helpers');
+        recordPageUseful(client, nbName, path).catch(() => {});
         return ok(kramdown);
       } catch (err) { return wrapError(err); }
     },
@@ -335,6 +339,34 @@ const tools = {
         await client.appendBlock(doc.id, note);
         await appendLog(client, resolveNotebook(notebook), `[resolve] ${supersede_path} superseded by ${keep_path}`);
         return ok(`Marked ${supersede_path} as superseded by ${keep_path}`);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_useful_pages: {
+    description: 'List wiki pages ranked by recent usefulness. Helps identify what knowledge is actively being used.',
+    inputSchema: {
+      days:     z.number().optional().describe('Only pages used within N days (default: 30)'),
+      notebook: z.string().optional(),
+    },
+    handler: async ({ days = 30, notebook } = {}) => {
+      try {
+        const client  = makeClient();
+        const nb      = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        const cutoff  = new Date(Date.now() - days * 86400000).toISOString();
+        const escapedBox    = nb.id.replace(/'/g, "''");
+        const escapedCutoff = cutoff.replace(/'/g, "''");
+        const rows = await client.sql(
+          `SELECT b.hpath, a.value as last_useful FROM blocks b ` +
+          `JOIN attributes a ON a.block_id = b.id ` +
+          `WHERE b.type='d' AND b.box='${escapedBox}' ` +
+          `AND a.name='custom-last-useful' AND a.value >= '${escapedCutoff}' ` +
+          `ORDER BY a.value DESC LIMIT 20`
+        );
+        if (!rows || rows.length === 0) return ok(`No pages used in the last ${days} days.`);
+        const lines = [`Pages used in last ${days} days (most recent first):`];
+        for (const r of rows) lines.push(`• ${r.hpath} — last used: ${r.last_useful.slice(0, 10)}`);
+        return ok(lines.join('\n'));
       } catch (err) { return wrapError(err); }
     },
   },
