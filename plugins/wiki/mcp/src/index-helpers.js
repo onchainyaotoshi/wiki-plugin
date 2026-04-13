@@ -2,7 +2,8 @@
 
 /**
  * reindex — rebuild /index in the wiki as a full catalog grouped by section.
- * Skips /log and /index themselves.
+ * Also generates category sub-indexes (/index-{slug}) for folders with ≥3 pages.
+ * Skips /log and /index* themselves.
  *
  * @param {SiYuanClient} client
  * @param {string}       notebookId  — notebook box id
@@ -14,8 +15,8 @@ async function reindex(client, notebookId) {
     `SELECT id, hpath, content FROM blocks WHERE type='d' AND box='${escapedBox}' ORDER BY hpath ASC`
   );
 
-  // Filter out /log and /index themselves
-  const filtered = docs.filter((d) => d.hpath !== '/log' && d.hpath !== '/index');
+  // Filter out /log, /index, and /index-* (sub-indexes) themselves
+  const filtered = docs.filter((d) => d.hpath !== '/log' && !d.hpath.startsWith('/index'));
 
   // Group by top-level folder
   const groups = {};
@@ -27,11 +28,54 @@ async function reindex(client, notebookId) {
     groups[folder].push(doc);
   }
 
-  // Build markdown
-  const now  = new Date().toISOString();
+  const sortedFolders = Object.keys(groups).sort();
+
+  // ── Generate category sub-indexes for folders with ≥3 pages ────────────────
+  const subIndexes = []; // { folder, slug, path, count }
+
+  for (const folder of sortedFolders) {
+    const folderDocs = groups[folder];
+    if (folderDocs.length < 3) continue; // skip small folders
+
+    const slug         = folder.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const subIndexPath = `/index-${slug}`;
+
+    const subLines = [
+      `# ${folder} Index`,
+      `_Last updated: ${new Date().toISOString()}_`,
+      '',
+      `**${folderDocs.length} pages**`,
+      '',
+    ];
+    for (const doc of folderDocs) {
+      const summary = (doc.content || '').trim().slice(0, 120).replace(/\n/g, ' ') || '—';
+      subLines.push(`- [${doc.hpath}](${doc.hpath}) — ${summary}`);
+    }
+
+    const subMarkdown = subLines.join('\n');
+    const existingSub = await client.getDocByHPath(notebookId, subIndexPath);
+    if (existingSub) {
+      await client.updateBlock(existingSub.id, subMarkdown);
+    } else {
+      await client.createDocWithMd(notebookId, subIndexPath, subMarkdown);
+    }
+
+    subIndexes.push({ folder, slug, path: subIndexPath, count: folderDocs.length });
+  }
+
+  // ── Build main /index markdown ──────────────────────────────────────────────
+  const now   = new Date().toISOString();
   const lines = [`# Wiki Index`, `_Last updated: ${now}_`, ''];
 
-  const sortedFolders = Object.keys(groups).sort();
+  // Add Sub-indexes section at the top if any exist
+  if (subIndexes.length > 0) {
+    lines.push('## Sub-indexes');
+    for (const { folder, path: siPath, count } of subIndexes) {
+      lines.push(`- [${folder}](${siPath}) — ${count} pages`);
+    }
+    lines.push('');
+  }
+
   for (const folder of sortedFolders) {
     lines.push(`## ${folder}`);
     for (const doc of groups[folder]) {
@@ -54,9 +98,10 @@ async function reindex(client, notebookId) {
   }
 
   return {
-    docsIndexed: filtered.length,
-    sections:    sortedFolders.length,
-    path:        indexPath,
+    docsIndexed:  filtered.length,
+    sections:     sortedFolders.length,
+    path:         indexPath,
+    subIndexes:   subIndexes.map(s => ({ path: s.path, count: s.count })),
   };
 }
 

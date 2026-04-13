@@ -1,6 +1,17 @@
 {
-  "description": "Wiki knowledge automation — mine at session start, capture at session end.",
+  "description": "Wiki knowledge automation — mine at session start, capture at session end, surface proactively on each prompt.",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/prompt-submit.cjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

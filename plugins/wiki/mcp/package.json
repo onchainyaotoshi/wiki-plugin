@@ -1,6 +1,6 @@
 {
   "name": "wiki-mcp",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "SiYuan wiki MCP server \u2014 bundled for Claude Code plugin",
   "main": "bundle.js",
   "scripts": {

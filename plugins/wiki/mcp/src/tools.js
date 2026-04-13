@@ -278,6 +278,28 @@ const tools = {
     },
   },
 
+  wiki_resolve_contradiction: {
+    description: 'Resolve a contradiction between two wiki pages. Marks the losing page as superseded.',
+    inputSchema: {
+      keep_path:      z.string().describe('Path of the page to keep as authoritative'),
+      supersede_path: z.string().describe('Path of the page to mark as superseded'),
+      reason:         z.string().optional().describe('Why this resolution was chosen'),
+      notebook:       z.string().optional(),
+    },
+    handler: async ({ keep_path, supersede_path, reason, notebook }) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        const doc    = await client.getDocByHPath(nb.id, supersede_path);
+        if (!doc) return ok(`Page not found: ${supersede_path}`);
+        const note = `\n> ⚠️ **SUPERSEDED** by [${keep_path}](${keep_path})${reason ? ` — ${reason}` : ''}`;
+        await client.appendBlock(doc.id, note);
+        await appendLog(client, resolveNotebook(notebook), `[resolve] ${supersede_path} superseded by ${keep_path}`);
+        return ok(`Marked ${supersede_path} as superseded by ${keep_path}`);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
 };
 
 module.exports = { tools };

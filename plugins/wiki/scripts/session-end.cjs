@@ -89,36 +89,56 @@ async function main() {
     const { makeClient, resolveNotebook, today } = require(path.join(srcDir, 'helpers'));
 
     const mined = await mineSessions({ since: '3h', limit: 6 });
-    if (mined.totalHits === 0) {
-      log(`no candidates (${mined.blocksScanned} blocks scanned)`);
-      process.exit(0);
-    }
 
-    const seen   = loadSeen();
     const client = makeClient();
     const nbName = resolveNotebook(cfg.notebook);
+    // Resolve notebook object early so both ingest and contradiction check can use nb.id
+    const nb     = await client.getOrCreateNotebook(nbName);
     const date   = today();
-    let count    = 0;
 
-    for (const { cat, hits } of mined.results) {
-      const section = SECTION_MAP[cat] || cat;
-      for (const hit of hits) {
-        const fp = fingerprint(hit.snippet);
-        if (seen.has(fp)) continue;
-        seen.add(fp);
-        await journalAppend(client, nbName, section, hit.snippet, date);
-        count++;
+    if (mined.totalHits === 0) {
+      log(`no candidates (${mined.blocksScanned} blocks scanned)`);
+    } else {
+      const seen   = loadSeen();
+      let count    = 0;
+
+      for (const { cat, hits } of mined.results) {
+        const section = SECTION_MAP[cat] || cat;
+        for (const hit of hits) {
+          const fp = fingerprint(hit.snippet);
+          if (seen.has(fp)) continue;
+          seen.add(fp);
+          await journalAppend(client, nbName, section, hit.snippet, date);
+          count++;
+        }
       }
+
+      saveSeen(seen);
+
+      if (count > 0) {
+        await crosslink(client, nb.id);
+      }
+
+      log(`ingested ${count} new / ${mined.totalHits} candidates found`);
     }
 
-    saveSeen(seen);
+    // ── Contradiction check — silent, log to /tmp ───────────────────────────
+    try {
+      const { lintContradictions } = require(path.join(srcDir, 'lint-helpers'));
+      const contradictions = await lintContradictions(client, nb.id);
+      if (contradictions.length > 0) {
+        const summary = contradictions.map(c =>
+          `${c.pageA}: "${c.claimA}"\n  vs ${c.pageB}: "${c.claimB}"`
+        ).join('\n\n');
+        fs.writeFileSync('/tmp/wiki-contradictions.txt',
+          `Wiki contradictions detected at ${new Date().toISOString()}:\n\n${summary}\n`
+        );
+        log(`contradiction check: ${contradictions.length} found — see /tmp/wiki-contradictions.txt`);
+      } else {
+        log(`contradiction check: none found`);
+      }
+    } catch (_) {}
 
-    if (count > 0) {
-      const nb = await client.getOrCreateNotebook(nbName);
-      await crosslink(client, nb.id);
-    }
-
-    log(`ingested ${count} new / ${mined.totalHits} candidates found`);
     process.exit(0);
   } catch (err) {
     log(`ERROR: ${err.message}`);
