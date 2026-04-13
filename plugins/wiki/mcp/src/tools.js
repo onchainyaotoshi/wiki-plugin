@@ -263,6 +263,26 @@ const tools = {
     },
   },
 
+  wiki_context_for_path: {
+    description: 'Get relevant wiki context (gotchas, decisions, guides) for file paths about to be edited. Surfaces known issues proactively.',
+    inputSchema: {
+      paths:    z.array(z.string()).describe('File paths about to be edited'),
+      notebook: z.string().optional(),
+    },
+    handler: async ({ paths, notebook }) => {
+      try {
+        const { getContextForPaths } = require('./path-context-helpers');
+        const client  = makeClient();
+        const nbName  = resolveNotebook(notebook);
+        const results = await getContextForPaths(client, nbName, paths);
+        if (results.length === 0) return ok('No relevant wiki context found for these paths.');
+        const lines = ['Relevant wiki context for these files:'];
+        for (const r of results) lines.push(`• **${r.hpath}**: ${r.content}`);
+        return ok(lines.join('\n'));
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
   wiki_learn_category: {
     description: 'Teach the wiki miner a new detection pattern. Call after manually ingesting something the auto-miner missed to improve future mining.',
     inputSchema: {
