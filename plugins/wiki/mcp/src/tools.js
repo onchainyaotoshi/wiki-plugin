@@ -5,7 +5,10 @@ const { resolveNotebook, makeClient, today } = require('./helpers');
 const { journalAppend }       = require('./journal-helpers');
 const { createDecision }      = require('./decision-helpers');
 const { crosslink }           = require('./crosslink-helpers');
-const { lintGaps, lintGraph, lintContradictions, lintStale } = require('./lint-helpers');
+const { lintGaps, lintGraph, lintContradictions, lintStale, lintSuperseded, lintRetention } = require('./lint-helpers');
+const { setConfidence, lintLowConfidence } = require('./confidence-helpers');
+const { consolidateJournal }              = require('./consolidate-helpers');
+const { crystallizeSession }              = require('./crystallize-helpers');
 const { updateRelatedEntities } = require('./entity-update-helpers');
 const { mineSessions }        = require('./mine-helpers');
 const { suggestADR }          = require('./suggest-adr-helpers');
@@ -156,9 +159,11 @@ const tools = {
       type:         z.string().optional().describe('custom-wiki-type, e.g. "guide"'),
       tags:         z.string().optional().describe('Comma-separated tags, e.g. "ginee,data-integrity"'),
       source_files: z.array(z.string()).optional().describe('Source file paths to hash for staleness tracking'),
+      confidence:   z.number().min(0).max(1).optional().describe('Confidence score 0.0–1.0 for the knowledge in this page'),
+      sources:      z.number().int().optional().describe('Number of sources supporting this page'),
       notebook:     z.string().optional().describe('Notebook name override'),
     },
-    handler: async ({ path, markdown, type, tags, source_files, notebook }) => {
+    handler: async ({ path, markdown, type, tags, source_files, confidence, sources, notebook }) => {
       try {
         const client = makeClient();
         const nbName = resolveNotebook(notebook);
@@ -187,6 +192,9 @@ const tools = {
             attrs['custom-last-ingested'] = new Date().toISOString();
           }
           if (Object.keys(attrs).length) await client.setBlockAttrs(docId, attrs);
+          if (confidence !== undefined || sources !== undefined) {
+            await setConfidence(client, docId, { confidence, sources });
+          }
         }
 
         try { await appendLog(client, nbName, `[push] ${path}`); } catch (_) {}
@@ -232,7 +240,7 @@ const tools = {
   wiki_lint: {
     description: 'Audit wiki health. type="gaps" (undefined concepts), "graph" (orphans/hubs), "contradictions" (conflicting claims), "stale" (source files changed since ingest), "all" (all checks).',
     inputSchema: {
-      type:     z.enum(['gaps', 'graph', 'contradictions', 'stale', 'all']).default('all').describe('Lint type'),
+      type:     z.enum(['gaps', 'graph', 'contradictions', 'stale', 'superseded', 'retention', 'confidence', 'all']).default('all').describe('Lint type'),
       notebook: z.string().optional().describe('Notebook name override'),
     },
     handler: async ({ type = 'all', notebook } = {}) => {
@@ -240,10 +248,13 @@ const tools = {
         const client = makeClient();
         const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
         const result = {};
-        if (type === 'gaps' || type === 'all') result.gaps  = await lintGaps(client, nb.id);
-        if (type === 'graph' || type === 'all') result.graph = await lintGraph(client, nb.id);
-        if (type === 'contradictions' || type === 'all') result.contradictions = await lintContradictions(client, nb.id);
-        if (type === 'stale' || type === 'all') result.stale = await lintStale(client, nb.id);
+        if (type === 'gaps'          || type === 'all') result.gaps          = await lintGaps(client, nb.id);
+        if (type === 'graph'         || type === 'all') result.graph         = await lintGraph(client, nb.id);
+        if (type === 'contradictions'|| type === 'all') result.contradictions= await lintContradictions(client, nb.id);
+        if (type === 'stale'         || type === 'all') result.stale         = await lintStale(client, nb.id);
+        if (type === 'superseded'    || type === 'all') result.superseded    = await lintSuperseded(client, nb.id);
+        if (type === 'retention'     || type === 'all') result.retention     = await lintRetention(client, nb.id);
+        if (type === 'confidence'    || type === 'all') result.confidence    = await lintLowConfidence(client, nb.id);
         return ok(result);
       } catch (err) { return wrapError(err); }
     },
@@ -337,8 +348,50 @@ const tools = {
         if (!doc) return ok(`Page not found: ${supersede_path}`);
         const note = `\n> ⚠️ **SUPERSEDED** by [${keep_path}](${keep_path})${reason ? ` — ${reason}` : ''}`;
         await client.appendBlock(doc.id, note);
+        const supersededAttrs = {
+          'custom-superseded-by': keep_path,
+          'custom-superseded-at': new Date().toISOString(),
+        };
+        if (reason) supersededAttrs['custom-superseded-reason'] = reason;
+        await client.setBlockAttrs(doc.id, supersededAttrs);
         await appendLog(client, resolveNotebook(notebook), `[resolve] ${supersede_path} superseded by ${keep_path}`);
         return ok(`Marked ${supersede_path} as superseded by ${keep_path}`);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_consolidate: {
+    description: 'Scan journal entries for recurring topics and return promotion candidates — topics that appear across multiple days and may deserve a semantic wiki page. Returns structured data for Claude to review.',
+    inputSchema: {
+      since:            z.number().optional().describe('Days to look back (default: 14)'),
+      min_occurrences:  z.number().optional().describe('Min journal days a topic must appear in (default: 2)'),
+      limit:            z.number().optional().describe('Max candidates (default: 10)'),
+      notebook:         z.string().optional(),
+    },
+    handler: async ({ since, min_occurrences, limit, notebook } = {}) => {
+      try {
+        const client = makeClient();
+        const nb     = await client.getOrCreateNotebook(resolveNotebook(notebook));
+        return ok(await consolidateJournal(client, nb.id, { since, minOccurrences: min_occurrences, limit }));
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
+  wiki_crystallize: {
+    description: 'Extract structured digest data from a Claude Code session or plan file — tools used, files edited, errors, key text blocks. Returns a pre-filled wiki template for Claude to synthesize and push.',
+    inputSchema: {
+      session_id:   z.string().optional().describe('8-char session ID prefix (from ~/.claude/projects/<project>/)'),
+      plan_file:    z.string().optional().describe('Plan/brainstorm filename (e.g. "2026-04-13-foo.md")'),
+      project_path: z.string().optional().describe('Project root path (default: PWD)'),
+    },
+    handler: async ({ session_id, plan_file, project_path } = {}) => {
+      try {
+        if (!session_id && !plan_file) return wrapError(new Error('Provide session_id or plan_file'));
+        return ok(await crystallizeSession({
+          projectPath: project_path || process.env.PWD,
+          sessionId:   session_id,
+          planFile:    plan_file,
+        }));
       } catch (err) { return wrapError(err); }
     },
   },

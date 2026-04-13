@@ -268,4 +268,51 @@ async function lintStale(client, notebookId) {
   return stale;
 }
 
-module.exports = { lintGaps, lintGraph, lintContradictions, lintStale };
+// ── Lint Superseded ────────────────────────────────────────────────────────
+
+async function lintSuperseded(client, notebookId) {
+  const escapedBox = notebookId.replace(/'/g, "''");
+  const rows = await client.sql(
+    `SELECT b.hpath, a.value as superseded_by,
+     (SELECT value FROM attributes WHERE name='custom-superseded-at' AND block_id=b.id LIMIT 1) as superseded_at,
+     (SELECT value FROM attributes WHERE name='custom-superseded-reason' AND block_id=b.id LIMIT 1) as reason
+     FROM blocks b
+     JOIN attributes a ON a.block_id = b.id
+     WHERE b.type='d' AND b.box='${escapedBox}' AND a.name='custom-superseded-by'`
+  );
+  return rows || [];
+}
+
+// ── Lint Retention ─────────────────────────────────────────────────────────
+
+async function lintRetention(client, notebookId, thresholdDays = 90) {
+  const escapedBox = notebookId.replace(/'/g, "''");
+  const cutoff     = new Date(Date.now() - thresholdDays * 86400000).toISOString();
+  const escapedCutoff = cutoff.replace(/'/g, "''");
+
+  // Wiki docs that have never been accessed (no custom-last-useful attr)
+  const neverAccessed = await client.sql(
+    `SELECT b.hpath FROM blocks b
+     WHERE b.type='d' AND b.box='${escapedBox}' AND b.ial LIKE '%custom-wiki-type%'
+     AND b.id NOT IN (
+       SELECT block_id FROM attributes WHERE name='custom-last-useful'
+     ) LIMIT 100`
+  );
+
+  // Wiki docs last accessed before threshold
+  const stale = await client.sql(
+    `SELECT b.hpath, a.value as last_useful FROM blocks b
+     JOIN attributes a ON a.block_id = b.id
+     WHERE b.type='d' AND b.box='${escapedBox}'
+     AND a.name='custom-last-useful' AND a.value < '${escapedCutoff}'
+     ORDER BY a.value ASC LIMIT 50`
+  );
+
+  return {
+    thresholdDays,
+    neverAccessed: (neverAccessed || []).map(r => r.hpath),
+    notAccessedSince: (stale || []).map(r => ({ hpath: r.hpath, lastUseful: r.last_useful })),
+  };
+}
+
+module.exports = { lintGaps, lintGraph, lintContradictions, lintStale, lintSuperseded, lintRetention };
