@@ -48,6 +48,10 @@ const CATEGORIES = {
       /pola yang (benar|dipakai)/i, /WAJIB:/,
     ],
   },
+  workflow: {
+    label: 'Workflow / Procedure', emoji: '🔄',
+    patterns: [], // special — not regex-matched, extracted by extractToolSequences
+  },
 };
 
 /**
@@ -79,6 +83,67 @@ function extractSnippet(text, match) {
 
 function fingerprint(snippet) {
   return snippet.slice(0, 80).toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Extract tool-call sequences (3+ consecutive successful calls) from JSONL content.
+ * @param {string} jsonlContent
+ * @param {string} sessionId
+ * @param {string} date  — YYYY-MM-DD
+ * @returns {Array<{ session: string, date: string, snippet: string }>}
+ */
+function extractToolSequences(jsonlContent, sessionId, date) {
+  const hits  = [];
+  const seen  = new Set();
+
+  const lines   = jsonlContent.split('\n').filter(l => l.trim());
+  const entries = [];
+  for (const line of lines) {
+    try { entries.push(JSON.parse(line)); } catch (_) {}
+  }
+
+  const toolCalls = [];
+
+  function flushSequence() {
+    if (toolCalls.length < 3) { toolCalls.length = 0; return; }
+    const snippet = toolCalls.map(t => `[${t.name}(${t.argSummary})]`).join(' → ');
+    const fp      = fingerprint(snippet);
+    if (!seen.has(fp)) {
+      seen.add(fp);
+      hits.push({ session: sessionId, date, snippet });
+    }
+    toolCalls.length = 0;
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.type !== 'assistant') continue;
+
+    for (const c of e.message?.content ?? []) {
+      if (c.type !== 'tool_use') continue;
+
+      // Check if next entry has a successful tool_result for this call
+      const next    = entries[i + 1];
+      const results = next?.message?.content ?? next?.content ?? [];
+      const result  = Array.isArray(results)
+        ? results.find(r => r.type === 'tool_result' && r.tool_use_id === c.id)
+        : null;
+      const isError = result?.is_error || false;
+
+      if (!isError) {
+        const argSummary = Object.entries(c.input || {})
+          .slice(0, 2)
+          .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
+          .join(', ');
+        toolCalls.push({ name: c.name, argSummary });
+      } else {
+        flushSequence();
+      }
+    }
+  }
+  flushSequence();
+
+  return hits;
 }
 
 /**
@@ -123,6 +188,8 @@ async function mineSessions(opts = {}) {
   }
 
   // JSONL sessions
+  const workflowHits = [];
+
   if (!plansOnly) {
     const sessDir = sessionsDir(projectPath);
     if (fs.existsSync(sessDir)) {
@@ -148,6 +215,10 @@ async function mineSessions(opts = {}) {
             }
           } catch (_) { /* skip malformed */ }
         }
+
+        // Tool-sequence pass (separate from text blocks)
+        const seqHits = extractToolSequences(content, sessionId, new Date(mtime).toISOString().slice(0, 10));
+        workflowHits.push(...seqHits);
       }
     }
   }
@@ -156,6 +227,8 @@ async function mineSessions(opts = {}) {
   const results = {};
 
   for (const [cat, { patterns }] of Object.entries(cats)) {
+    // workflow category has no patterns — handled separately below
+    if (cat === 'workflow') continue;
     const hits = [];
     const seen = new Set();
     for (const block of blocks) {
@@ -171,6 +244,11 @@ async function mineSessions(opts = {}) {
       }
     }
     results[cat] = hits.slice(0, limit);
+  }
+
+  // Add workflow hits if category is included
+  if (!filterCat || filterCat === 'workflow') {
+    results['workflow'] = workflowHits.slice(0, limit);
   }
 
   const totalHits = Object.values(results).reduce((s, h) => s + h.length, 0);
