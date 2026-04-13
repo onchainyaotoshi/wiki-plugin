@@ -76,6 +76,14 @@ async function main() {
     process.exit(0);
   }
 
+  // Fast pre-flight — check if SiYuan is reachable before doing any work
+  try {
+    await fetch(cfg.url + '/api/system/version', { signal: AbortSignal.timeout(2000) });
+  } catch (_) {
+    log('SiYuan unreachable — skipping');
+    process.exit(0);
+  }
+
   // Inject env vars BEFORE requiring any helper that reads process.env at load time
   process.env.SIYUAN_TOKEN          = cfg.token;
   process.env.SIYUAN_URL            = cfg.url;

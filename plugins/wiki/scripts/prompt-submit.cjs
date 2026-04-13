@@ -38,6 +38,13 @@ async function main() {
   const cfg = loadConfig();
   if (!cfg.token) { process.exit(0); }
 
+  // Fast pre-flight — check if SiYuan is reachable
+  try {
+    await fetch(cfg.url + '/api/system/version', { signal: AbortSignal.timeout(2000) });
+  } catch (_) {
+    process.exit(0);
+  }
+
   let prompt = '';
   try { prompt = JSON.parse(input)?.prompt || ''; } catch (_) { process.exit(0); }
   if (!prompt || prompt.length < 10) { process.exit(0); }

@@ -25,14 +25,26 @@ class SiYuanClient {
   }
 
   async post(endpoint, payload = {}) {
-    const res = await fetch(`${this.baseUrl}${endpoint}`, {
-      method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization:  `Token ${this.token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const url        = `${this.baseUrl}${endpoint}`;
+    const controller = new AbortController();
+    const timer      = setTimeout(() => controller.abort(), 5000);
+    let res;
+    try {
+      res = await fetch(url, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Token ${this.token}`,
+        },
+        body:   JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') throw new Error('SiYuan unreachable (timeout)');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     const json = await res.json();
     if (json.code !== 0) {
       throw new Error(`SiYuan ${endpoint}: ${json.msg} (code ${json.code})`);
