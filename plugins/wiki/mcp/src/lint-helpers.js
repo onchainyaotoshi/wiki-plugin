@@ -23,8 +23,9 @@ const STOP_TERMS = new Set([
 ]);
 
 async function lintGaps(client, notebookId) {
+  const escapedBox = notebookId.replace(/'/g, "''"); // F6
   const docs = await client.sql(
-    `SELECT id, hpath FROM blocks WHERE type='d' AND box='${notebookId}' LIMIT 10000`
+    `SELECT id, hpath FROM blocks WHERE type='d' AND box='${escapedBox}' LIMIT 10000`
   );
 
   const definedConcepts = new Set();
@@ -46,7 +47,7 @@ async function lintGaps(client, notebookId) {
 
   const blocks = await client.sql(
     `SELECT id, type, root_id, markdown FROM blocks
-     WHERE box='${notebookId}' AND type IN ('p','h','i','t')
+     WHERE box='${escapedBox}' AND type IN ('p','h','i','t')
      AND markdown IS NOT NULL AND markdown != ''
      LIMIT 100000`
   );
@@ -214,12 +215,14 @@ async function lintContradictions(client, notebookId) {
               pageB: b.hpath, claimB: cb.slice(0, 100),
               overlap,
             });
+            if (flags.length >= 20) break; // F5: break immediately at cap
           }
         }
+        if (flags.length >= 20) break;
       }
-      if (flags.length > 20) break; // cap at 20 findings
+      if (flags.length >= 20) break;
     }
-    if (flags.length > 20) break;
+    if (flags.length >= 20) break;
   }
 
   return flags;
@@ -229,13 +232,14 @@ async function lintContradictions(client, notebookId) {
 
 async function lintStale(client, notebookId) {
   const { hashPaths } = require('./hash-helpers');
+  const escapedBox = notebookId.replace(/'/g, "''"); // F6
 
   const rows = await client.sql(
     `SELECT b.hpath, b.id, a.value as source_files,
             (SELECT value FROM attributes WHERE name='custom-source-hash' AND block_id=b.id LIMIT 1) as stored_hash
      FROM blocks b
      JOIN attributes a ON a.block_id = b.id
-     WHERE b.box='${notebookId}' AND b.type='d' AND a.name='custom-source-files'`
+     WHERE b.box='${escapedBox}' AND b.type='d' AND a.name='custom-source-files'`
   );
 
   const stale = [];
@@ -291,9 +295,11 @@ async function lintRetention(client, notebookId, thresholdDays = 90) {
   const escapedCutoff = cutoff.replace(/'/g, "''");
 
   // Wiki docs that have never been accessed (no custom-last-useful attr)
+  // F3: exclude journal pages — they're appended to, never fetched via wiki_get
   const neverAccessed = await client.sql(
     `SELECT b.hpath FROM blocks b
      WHERE b.type='d' AND b.box='${escapedBox}' AND b.ial LIKE '%custom-wiki-type%'
+     AND b.ial NOT LIKE '%custom-wiki-type="journal"%'
      AND b.id NOT IN (
        SELECT block_id FROM attributes WHERE name='custom-last-useful'
      ) LIMIT 100`

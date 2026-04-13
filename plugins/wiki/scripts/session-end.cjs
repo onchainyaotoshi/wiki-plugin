@@ -112,19 +112,28 @@ async function main() {
       let count             = 0;
       const ingestedBlockIds = [];
 
-      for (const { cat, hits } of mined.results) {
-        const section = SECTION_MAP[cat] || cat;
-        for (const hit of hits) {
-          const fp = fingerprint(hit.snippet);
-          if (seen.has(fp)) continue;
-          seen.add(fp);
-          const result = await journalAppend(client, nbName, section, hit.snippet, date);
-          if (result.blockId) ingestedBlockIds.push(result.blockId);
-          count++;
+      try {
+        for (const { cat, hits } of mined.results) {
+          // F1: unknown/custom categories fall back to 'What Happened' (not raw cat name)
+          const section = SECTION_MAP[cat] || 'What Happened';
+          for (const hit of hits) {
+            const fp = fingerprint(hit.snippet);
+            if (seen.has(fp)) continue;
+            seen.add(fp);
+            try {
+              // F2: per-call try-catch so one failure doesn't abort loop + lose dedup state
+              const result = await journalAppend(client, nbName, section, hit.snippet, date);
+              if (result.blockId) ingestedBlockIds.push(result.blockId);
+              count++;
+            } catch (appendErr) {
+              log(`WARN: journalAppend failed for cat="${cat}": ${appendErr.message}`);
+            }
+          }
         }
+      } finally {
+        // F2: always persist seen fingerprints even if loop throws mid-way
+        saveSeen(seen);
       }
-
-      saveSeen(seen);
 
       if (count > 0) {
         await crosslinkIncremental(client, nb.id, ingestedBlockIds);

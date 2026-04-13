@@ -92,7 +92,8 @@ function _extractFromJsonl(filePath) {
     }
 
     if (entry.type === 'user') {
-      for (const c of entry.message?.content ?? []) {
+      // F4: content can be at entry.message.content OR entry.content (two JSONL formats)
+      for (const c of entry.message?.content ?? entry.content ?? []) {
         if (c.type === 'tool_result' && c.is_error === true) {
           const msg = _resultText(c.content).trim();
           if (msg && errors.length < 5) {
