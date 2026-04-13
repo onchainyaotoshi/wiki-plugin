@@ -93,7 +93,7 @@ async function main() {
     const srcDir         = path.join(__dirname, '../mcp/src');
     const { mineSessions }  = require(path.join(srcDir, 'mine-helpers'));
     const { journalAppend } = require(path.join(srcDir, 'journal-helpers'));
-    const { crosslink }     = require(path.join(srcDir, 'crosslink-helpers'));
+    const { crosslinkIncremental } = require(path.join(srcDir, 'crosslink-helpers'));
     const { makeClient, resolveNotebook, today } = require(path.join(srcDir, 'helpers'));
 
     const mined = await mineSessions({ since: '3h', limit: 6 });
@@ -107,8 +107,9 @@ async function main() {
     if (mined.totalHits === 0) {
       log(`no candidates (${mined.blocksScanned} blocks scanned)`);
     } else {
-      const seen   = loadSeen();
-      let count    = 0;
+      const seen            = loadSeen();
+      let count             = 0;
+      const ingestedBlockIds = [];
 
       for (const { cat, hits } of mined.results) {
         const section = SECTION_MAP[cat] || cat;
@@ -116,7 +117,8 @@ async function main() {
           const fp = fingerprint(hit.snippet);
           if (seen.has(fp)) continue;
           seen.add(fp);
-          await journalAppend(client, nbName, section, hit.snippet, date);
+          const result = await journalAppend(client, nbName, section, hit.snippet, date);
+          if (result.blockId) ingestedBlockIds.push(result.blockId);
           count++;
         }
       }
@@ -124,7 +126,7 @@ async function main() {
       saveSeen(seen);
 
       if (count > 0) {
-        await crosslink(client, nb.id);
+        await crosslinkIncremental(client, nb.id, ingestedBlockIds);
       }
 
       log(`ingested ${count} new / ${mined.totalHits} candidates found`);

@@ -118,4 +118,92 @@ async function crosslink(client, notebookId) {
   };
 }
 
-module.exports = { crosslink };
+/**
+ * crosslinkIncremental — only process the newly appended blocks instead of all blocks.
+ * O(new blocks * alias count) instead of O(all blocks * alias count).
+ */
+async function crosslinkIncremental(client, notebookId, newBlockIds) {
+  if (!newBlockIds || newBlockIds.length === 0) return { linked: 0 };
+
+  // Build alias map from existing wiki docs (same as crosslink)
+  const docs = await client.sql(
+    `SELECT id, hpath FROM blocks WHERE type='d' AND box='${notebookId}' AND ial LIKE '%custom-wiki-type%'`
+  );
+
+  const aliasMap = new Map();
+
+  for (const doc of docs) {
+    const slug      = doc.hpath.split('/').pop();
+    const escapedId = doc.id.replace(/'/g, "''");
+    const h1Blocks  = await client.sql(
+      `SELECT markdown FROM blocks WHERE root_id='${escapedId}' AND type='h' AND subtype='h1' LIMIT 1`
+    );
+    const h1Title = h1Blocks[0]?.markdown || '';
+    const aliases = deriveAliases(slug, h1Title);
+
+    for (const alias of aliases) {
+      const existing = aliasMap.get(alias.toLowerCase());
+      if (!existing || alias.length > existing.alias.length) {
+        aliasMap.set(alias.toLowerCase(), { docId: doc.id, slug, alias });
+      }
+    }
+  }
+
+  const sortedAliases = Array.from(aliasMap.values())
+    .sort((a, b) => b.alias.length - a.alias.length);
+
+  let linked = 0;
+
+  for (const blockId of newBlockIds) {
+    if (!blockId) continue;
+    const escapedId = blockId.replace(/'/g, "''");
+    const rows = await client.sql(
+      `SELECT id, type, root_id, markdown FROM blocks WHERE id='${escapedId}' LIMIT 1`
+    );
+    if (!rows || rows.length === 0) continue;
+
+    const block = rows[0];
+    if (!block.markdown) continue;
+
+    let markdown = block.markdown;
+    let modified = false;
+    const linkedDocs = new Set([block.root_id]);
+
+    for (const entry of sortedAliases) {
+      if (linkedDocs.has(entry.docId)) continue;
+
+      const escaped = entry.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex   = new RegExp(`(?<![\\w/-])\\b${escaped}\\b(?![\\w/-])`, 'i');
+      const match   = markdown.match(regex);
+      if (!match) continue;
+
+      const before     = markdown.slice(0, match.index);
+      const backticks  = (before.match(/`/g) || []).length;
+      if (backticks % 2 === 1) continue;
+
+      const parenOpens  = (before.match(/\(\(/g) || []).length;
+      const parenCloses = (before.match(/\)\)/g) || []).length;
+      if (parenOpens > parenCloses) continue;
+
+      const brackOpens  = (before.match(/\[/g) || []).length;
+      const brackCloses = (before.match(/\]/g) || []).length;
+      if (brackOpens > brackCloses) continue;
+
+      const ref = `((${entry.docId} "${match[0]}"))`;
+      markdown  = markdown.slice(0, match.index) + ref + markdown.slice(match.index + match[0].length);
+      linkedDocs.add(entry.docId);
+      modified = true;
+    }
+
+    if (modified) {
+      try {
+        await client.updateBlock(block.id, markdown);
+        linked++;
+      } catch (_) { /* skip */ }
+    }
+  }
+
+  return { linked };
+}
+
+module.exports = { crosslink, crosslinkIncremental };

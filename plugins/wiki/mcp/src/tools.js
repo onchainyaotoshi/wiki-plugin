@@ -120,7 +120,7 @@ const tools = {
         const result   = await journalAppend(client, nbName, section, text, today());
         try { await appendLog(client, nbName, `[journal] ${section}: ${text.slice(0, 80)}`); } catch (_) {}
         try { await updateRelatedEntities(client, nbName, section, text, today()); } catch (_) {}
-        return ok(result);
+        return ok(result.message);
       } catch (err) { return wrapError(err); }
     },
   },

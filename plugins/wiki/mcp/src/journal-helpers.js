@@ -70,8 +70,16 @@ async function journalAppend(client, notebookName, section, text, date) {
   }
 
   // Insert new bullet after section heading or after last content
-  await client.insertBlock(blocks[lastInSection].id, bullet);
-  return `[journal ${date}] appended to "${section}": ${text}`;
+  const insertResult = await client.insertBlock(blocks[lastInSection].id, bullet);
+  // insertBlock returns an array of { doOperations: [{ id, ... }] }
+  let blockId = null;
+  try {
+    blockId = (insertResult?.[0]?.doOperations?.[0]?.id) || null;
+  } catch (_) {}
+  return {
+    message: `[journal ${date}] appended to "${section}": ${text}`,
+    blockId,
+  };
 }
 
 // ── Internals ──
