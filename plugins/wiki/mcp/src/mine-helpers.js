@@ -223,7 +223,20 @@ async function mineSessions(opts = {}) {
     }
   }
 
-  const cats    = filterCat ? { [filterCat]: CATEGORIES[filterCat] } : CATEGORIES;
+  const { loadCustomCategories, mergeWithBuiltins } = require('./custom-categories-helpers');
+  const customCats   = loadCustomCategories(projectPath);
+  const customMerged = mergeWithBuiltins(customCats);
+
+  const baseCats = filterCat ? { [filterCat]: CATEGORIES[filterCat] } : { ...CATEGORIES };
+
+  // Merge custom categories into the working set
+  for (const cc of customMerged) {
+    if (!baseCats[cc.cat]) {
+      baseCats[cc.cat] = { label: cc.label, emoji: cc.emoji, patterns: cc.patterns };
+    }
+  }
+
+  const cats    = baseCats;
   const results = {};
 
   for (const [cat, { patterns }] of Object.entries(cats)) {

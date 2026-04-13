@@ -263,6 +263,25 @@ const tools = {
     },
   },
 
+  wiki_learn_category: {
+    description: 'Teach the wiki miner a new detection pattern. Call after manually ingesting something the auto-miner missed to improve future mining.',
+    inputSchema: {
+      label:        z.string().describe('Category label, e.g. "Performance Issue"'),
+      example_text: z.string().describe('Example text that should have been detected'),
+      project_path: z.string().optional().describe('Project path (default: PWD)'),
+    },
+    handler: async ({ label, example_text, project_path }) => {
+      try {
+        const { saveCustomCategory, extractKeyPhrases } = require('./custom-categories-helpers');
+        const projectPath = project_path || process.env.PWD || '';
+        const phrases     = extractKeyPhrases(example_text);
+        if (phrases.length === 0) return ok('No key phrases extracted — try a longer example_text');
+        saveCustomCategory(projectPath, label, phrases);
+        return ok(`Learned: "${label}" — patterns: ${phrases.join(', ')}`);
+      } catch (err) { return wrapError(err); }
+    },
+  },
+
   wiki_suggest_adr: {
     description: 'Mine git log for modules with significant activity but no ADR coverage.',
     inputSchema: {
